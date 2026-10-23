@@ -38,8 +38,10 @@ enum VolumeService {
         let uuid = string(info["VolumeUUID"])
         let filesystem = string(info["FilesystemUserVisibleName"]).ifEmpty(string(info["FilesystemName"]))
         let personality = string(info["FilesystemName"])
-        let free = int64(info["FreeSpace"]) ?? int64(info["VolumeFreeSpace"]) ?? 0
-        let total = int64(info["TotalSize"]) ?? 0
+        // APFS reports diskutil FreeSpace as 0. Real free space is container-level
+        // (what Disk Utility shows) or URL volume capacity.
+        let free = availableBytes(at: url, diskutil: info)
+        let total = int64(info["TotalSize"]) ?? int64(info["APFSContainerSize"]) ?? 0
 
         var reason: String?
         let lowerName = name.lowercased()
@@ -61,6 +63,21 @@ enum VolumeService {
             isEligible: reason == nil,
             ineligibilityReason: reason
         )
+    }
+
+    private static func availableBytes(at url: URL, diskutil info: [String: Any]) -> Int64 {
+        let values = try? url.resourceValues(forKeys: [
+            .volumeAvailableCapacityForImportantUsageKey,
+            .volumeAvailableCapacityKey,
+        ])
+        let important = Int64(values?.volumeAvailableCapacityForImportantUsage ?? 0)
+        if important > 0 { return important }
+        let available = Int64(values?.volumeAvailableCapacity ?? 0)
+        if available > 0 { return available }
+        if let container = int64(info["APFSContainerFree"]), container > 0 {
+            return container
+        }
+        return int64(info["FreeSpace"]) ?? int64(info["VolumeFreeSpace"]) ?? 0
     }
 
     private static func isAppleFileSystem(_ personality: String, _ visible: String) -> Bool {
